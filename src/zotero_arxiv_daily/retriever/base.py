@@ -25,15 +25,22 @@ class BaseRetriever(ABC):
         raw_papers = self._retrieve_raw_papers()
         logger.info("Processing papers...")
         papers = []
+        conversion_errors = 0
         for raw_paper in tqdm(raw_papers, total=len(raw_papers), desc="Converting papers"):
             try:
                 paper = self.convert_to_paper(raw_paper)
             except Exception as exc:
+                conversion_errors += 1
                 logger.warning(f"Skipping paper {getattr(raw_paper, 'title', raw_paper)}: {exc}")
                 continue
             if paper is not None:
                 papers.append(paper)
             sleep(1)
+        if conversion_errors and not papers:
+            raise RuntimeError(
+                f"{self.name}: retrieved {len(raw_papers)} papers but conversion failed; "
+                "this is not an empty announcement. Inspect the conversion warnings."
+            )
         return papers
 
 registered_retrievers = {}

@@ -84,6 +84,18 @@ def test_retrieve_papers_skips_conversion_errors(config, monkeypatch):
     assert [p.title for p in papers] == ["good paper"]
 
 
+def test_all_conversion_errors_are_not_reported_as_no_new_papers(config, monkeypatch):
+    import pytest
+
+    monkeypatch.setattr("zotero_arxiv_daily.retriever.base.sleep", lambda _: None)
+    with open_dict(config.source):
+        config.source.failing_test = {}
+    retriever = FailingTestRetriever(config)
+    monkeypatch.setattr(retriever, "_retrieve_raw_papers", lambda: [{"title": "bad paper", "mode": "fail"}])
+    with pytest.raises(RuntimeError, match="not an empty announcement"):
+        retriever.retrieve_papers()
+
+
 def test_retrieve_papers_runs_serially(config, monkeypatch):
     monkeypatch.setattr("zotero_arxiv_daily.retriever.base.sleep", lambda _: None)
     with open_dict(config.source):
