@@ -6,6 +6,10 @@ on:
         description: Send a diagnostic email even when there are no new papers
         type: boolean
         default: false
+      validate_pipeline:
+        description: Validate the complete pipeline using one real paper
+        type: boolean
+        default: false
   schedule:
     # 14:17 Asia/Shanghai, after the arXiv RSS midnight-EST refresh.
     # Avoid the start of the hour, when scheduled Actions are more likely to queue.
@@ -32,6 +36,13 @@ jobs:
       - name: Setup uv
         uses: astral-sh/setup-uv@v7
 
+      - name: Restore paper delivery history
+        uses: actions/cache/restore@v5
+        with:
+          path: .state/delivered-papers.json
+          key: arxiv-delivery-v1-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: arxiv-delivery-v1-
+
       - name: Run script
         id: digest
         shell: bash
@@ -45,13 +56,25 @@ jobs:
           OPENAI_API_BASE: ${{ secrets.OPENAI_API_BASE }}
           CUSTOM_CONFIG: ${{ vars.CUSTOM_CONFIG }}
           SEND_EMPTY: ${{ inputs.send_empty && 'true' || 'false' }}
+          VALIDATE_PIPELINE: ${{ inputs.validate_pipeline && 'true' || 'false' }}
+          DELIVERY_STATE_FILE: ${{ github.workspace }}/.state/delivered-papers.json
         run: |
           printf "%b\n" "$CUSTOM_CONFIG" > config/custom.yaml
           args=()
           if [[ "$SEND_EMPTY" == "true" ]]; then
             args+=(executor.send_empty=true)
           fi
+          if [[ "$VALIDATE_PIPELINE" == "true" ]]; then
+            args+=(executor.debug=true executor.max_paper_num=1)
+          fi
           uv run src/zotero_arxiv_daily/main.py "${args[@]}" 2>&1 | tee "$RUNNER_TEMP/arxiv-daily.log"
+
+      - name: Save paper delivery history
+        if: always() && hashFiles('.state/delivered-papers.json') != ''
+        uses: actions/cache/save@v5
+        with:
+          path: .state/delivered-papers.json
+          key: arxiv-delivery-v1-${{ github.run_id }}-${{ github.run_attempt }}
 
       - name: Summarize email delivery
         if: always()

@@ -11,6 +11,7 @@ from .construct_email import render_email
 from .utils import send_email
 from openai import OpenAI
 from tqdm import tqdm
+from .delivery_state import DeliveryState
 class Executor:
     def __init__(self, config:DictConfig):
         self.config = config
@@ -58,6 +59,7 @@ class Executor:
 
     
     def run(self):
+        delivery_state = DeliveryState()
         corpus = self.fetch_zotero_corpus()
         corpus = self.filter_corpus(corpus)
         if len(corpus) == 0:
@@ -73,6 +75,7 @@ class Executor:
             logger.info(f"Retrieved {len(papers)} {source} papers")
             all_papers.extend(papers)
         logger.info(f"Total {len(all_papers)} papers retrieved from all sources")
+        all_papers = [p for p in all_papers if not delivery_state.contains(p.url)]
         reranked_papers = []
         if len(all_papers) > 0:
             logger.info("Reranking papers...")
@@ -89,3 +92,4 @@ class Executor:
         email_content = render_email(reranked_papers)
         send_email(self.config, email_content)
         logger.info("Email sent successfully")
+        delivery_state.mark_sent(p.url for p in reranked_papers)
