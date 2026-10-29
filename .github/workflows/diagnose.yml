@@ -1,0 +1,80 @@
+name: Diagnose paper pipeline
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v7
+      - name: Probe configured services
+        shell: bash
+        env:
+          ZOTERO_ID: ${{ secrets.ZOTERO_ID }}
+          ZOTERO_KEY: ${{ secrets.ZOTERO_KEY }}
+          SENDER: ${{ secrets.SENDER }}
+          RECEIVER: ${{ secrets.RECEIVER }}
+          SENDER_PASSWORD: ${{ secrets.SENDER_PASSWORD }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_API_BASE: ${{ secrets.OPENAI_API_BASE }}
+          CUSTOM_CONFIG: ${{ vars.CUSTOM_CONFIG }}
+        run: |
+          printf "%b\n" "$CUSTOM_CONFIG" > config/custom.yaml
+          uv run python - <<'PY'
+          import json, os, time
+          from pathlib import Path
+          from collections import Counter
+          from urllib.parse import urlparse
+          import requests, feedparser, arxiv
+          from hydra import initialize_config_dir, compose
+          from omegaconf import OmegaConf
+          from openai import OpenAI
+          from zotero_arxiv_daily.executor import Executor
+          with initialize_config_dir(config_dir=str(Path("config").resolve()), version_base=None):
+              cfg = compose(config_name="default")
+          results = {}
+          def check(stage, operation):
+              started = time.monotonic()
+              try:
+                  detail = operation()
+                  results[stage] = {"status": "ok", **detail}
+              except Exception as exc:
+                  results[stage] = {"status": "failed", "error_type": type(exc).__name__, "http_status": getattr(exc, "status_code", None), "code": getattr(exc, "code", None)}
+              results[stage]["seconds"] = round(time.monotonic() - started, 2)
+              print(stage + ": " + json.dumps(results[stage], ensure_ascii=False), flush=True)
+          executor = Executor(cfg)
+          def zotero_probe():
+              corpus = executor.filter_corpus(executor.fetch_zotero_corpus())
+              return {"usable_papers": len(corpus)}
+          check("zotero", zotero_probe)
+          def rss_probe():
+              url = "https://rss.arxiv.org/atom/" + "+".join(cfg.source.arxiv.category)
+              response = requests.get(url, timeout=30)
+              response.raise_for_status()
+              feed = feedparser.parse(response.content)
+              return {"http_status": response.status_code, "bytes": len(response.content), "parse_error": bool(feed.bozo), "entries": len(feed.entries), "announce_types": dict(Counter(e.get("arxiv_announce_type", "new") for e in feed.entries)), "updated": feed.feed.get("updated"), "cache_age": response.headers.get("Age")}
+          check("arxiv_rss", rss_probe)
+          time.sleep(5)
+          def api_probe():
+              search = arxiv.Search(query=" OR ".join("cat:" + c for c in cfg.source.arxiv.category), max_results=5, sort_by=arxiv.SortCriterion.SubmittedDate, sort_order=arxiv.SortOrder.Descending)
+              papers = list(arxiv.Client(page_size=5, num_retries=2, delay_seconds=5).results(search))
+              return {"papers": len(papers), "samples": [{"id": p.get_short_id(), "published": p.published.isoformat(), "title": p.title} for p in papers]}
+          check("arxiv_query_api", api_probe)
+          client = OpenAI(api_key=cfg.llm.api.key, base_url=cfg.llm.api.base_url, timeout=60, max_retries=0)
+          def llm_probe():
+              kwargs = OmegaConf.to_container(cfg.llm.generation_kwargs, resolve=True)
+              kwargs["max_tokens"] = 256
+              response = client.chat.completions.create(messages=[{"role": "user", "content": "Connection health check: reply with only the word OK."}], **kwargs)
+              choice = response.choices[0]
+              return {"host": urlparse(cfg.llm.api.base_url).hostname, "configured_model": cfg.llm.generation_kwargs.model, "response_model": response.model, "content_nonempty": bool(choice.message.content), "finish_reason": choice.finish_reason}
+          check("deepseek_completion", llm_probe)
+          if results["deepseek_completion"]["status"] == "failed":
+              check("llm_model_list", lambda: {"models": [m.id for m in client.models.list().data]})
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
+              summary.write("## Pipeline diagnostics\n\n```json\n" + json.dumps(results, ensure_ascii=False, indent=2) + "\n```\n")
+          if any(r["status"] == "failed" for r in results.values()):
+              raise SystemExit(1)
+          PY
