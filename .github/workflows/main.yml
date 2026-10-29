@@ -57,6 +57,8 @@ jobs:
           CUSTOM_CONFIG: ${{ vars.CUSTOM_CONFIG }}
           SEND_EMPTY: ${{ inputs.send_empty && 'true' || 'false' }}
           VALIDATE_PIPELINE: ${{ inputs.validate_pipeline && 'true' || 'false' }}
+          ARXIV_DIAGNOSTIC: ${{ inputs.validate_pipeline && 'true' || 'false' }}
+          EMAIL_SUBJECT_PREFIX: ${{ inputs.validate_pipeline && '[TEST] ' || '' }}
           DELIVERY_STATE_FILE: ${{ github.workspace }}/.state/delivered-papers.json
         run: |
           printf "%b\n" "$CUSTOM_CONFIG" > config/custom.yaml
@@ -91,7 +93,8 @@ jobs:
             elif grep -qF "Email sent successfully" "$log"; then
               echo "**Email sent successfully.**"
             elif grep -qF "No new papers found. No email will be sent." "$log"; then
-              echo "**No email sent:** the configured feeds returned no new papers."
+              echo "**No email sent:** no new announcement was present in the configured feeds."
+              echo "arXiv can defer announcement batches for maintenance or holidays. See https://status.arxiv.org/."
             else
               echo "**Email delivery not confirmed.** Check the Run script logs."
             fi
