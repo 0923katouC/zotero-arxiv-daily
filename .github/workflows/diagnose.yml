@@ -28,6 +28,7 @@ jobs:
           from pathlib import Path
           from collections import Counter
           from urllib.parse import urlparse
+          from email.utils import parseaddr
           import requests, feedparser, arxiv
           from hydra import initialize_config_dir, compose
           from omegaconf import OmegaConf
@@ -45,6 +46,12 @@ jobs:
                   results[stage] = {"status": "failed", "error_type": type(exc).__name__, "http_status": getattr(exc, "status_code", None), "code": getattr(exc, "code", None)}
               results[stage]["seconds"] = round(time.monotonic() - started, 2)
               print(stage + ": " + json.dumps(results[stage], ensure_ascii=False), flush=True)
+          def mail_routing_probe():
+              actual = parseaddr(str(cfg.email.receiver))[1].strip().lower()
+              configured_secret = parseaddr(os.environ.get("RECEIVER", ""))[1].strip().lower()
+              domain = actual.rsplit("@", 1)[-1] if "@" in actual else ""
+              return {"receiver_is_set": bool(actual), "receiver_matches_receiver_secret": actual == configured_secret, "receiver_is_ucas": domain == "ucas.ac.cn" or domain.endswith(".ucas.ac.cn")}
+          check("mail_routing", mail_routing_probe)
           executor = Executor(cfg)
           def zotero_probe():
               corpus = executor.filter_corpus(executor.fetch_zotero_corpus())
