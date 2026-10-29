@@ -9,7 +9,7 @@ from zotero_arxiv_daily.retriever import arxiv_retriever as module
 
 def make_retriever(monkeypatch, tmp_path, entries=(), candidates=()):
     monkeypatch.setenv("DELIVERY_STATE_FILE", str(tmp_path / "state.json"))
-    feed = feedparser.FeedParserDict(feed={"title": "gr-qc updates"}, entries=list(entries))
+    feed = feedparser.FeedParserDict(feed=feedparser.FeedParserDict(title="gr-qc updates"), entries=list(entries))
     monkeypatch.setattr(module, "fetch_arxiv_feed", lambda url: feed)
     calls = []
     class Client:
