@@ -14,6 +14,8 @@ on:
     # 14:17 Asia/Shanghai, after the arXiv RSS midnight-EST refresh.
     # Avoid the start of the hour, when scheduled Actions are more likely to queue.
     - cron: '17 6 * * *'
+    # One guarded verification slot; remove after scheduler validation.
+    - cron: '9 9 29 10 *'
 
 permissions:
   contents: read
@@ -26,7 +28,19 @@ jobs:
   calculate-and-send:
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    env:
+      TRIGGER_EVENT: ${{ github.event_name }}
+      TRIGGER_SCHEDULE: ${{ github.event.schedule }}
     steps:
+      - name: Record trigger context
+        shell: bash
+        env:
+          TRIGGER_ACTOR: ${{ github.actor }}
+          TRIGGER_SHA: ${{ github.sha }}
+        run: |
+          printf 'event=%s schedule=%s actor=%s sha=%s\n' "$TRIGGER_EVENT" "$TRIGGER_SCHEDULE" "$TRIGGER_ACTOR" "$TRIGGER_SHA"
+          date -u +'%Y-%m-%dT%H:%M:%SZ'
+
       - name: Checkout
         uses: actions/checkout@v6
         with:
@@ -61,6 +75,10 @@ jobs:
           EMAIL_SUBJECT_PREFIX: ${{ inputs.validate_pipeline && '[TEST] ' || '' }}
           DELIVERY_STATE_FILE: ${{ github.workspace }}/.state/delivered-papers.json
         run: |
+          if [[ "$TRIGGER_EVENT" == "schedule" && "$TRIGGER_SCHEDULE" == "9 9 29 10 *" && "$(date -u +%F)" != "2026-10-29" ]]; then
+            echo "One-off scheduler verification expired; digest was not run."
+            exit 0
+          fi
           printf "%b\n" "$CUSTOM_CONFIG" > config/custom.yaml
           args=()
           if [[ "$SEND_EMPTY" == "true" ]]; then
