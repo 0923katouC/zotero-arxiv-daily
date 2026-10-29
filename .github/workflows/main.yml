@@ -1,6 +1,11 @@
 name: Send emails daily
 on:
   workflow_dispatch:
+    inputs:
+      send_empty:
+        description: Send a diagnostic email even when there are no new papers
+        type: boolean
+        default: false
   schedule:
     # 14:17 Asia/Shanghai, after the arXiv RSS midnight-EST refresh.
     # Avoid the start of the hour, when scheduled Actions are more likely to queue.
@@ -39,9 +44,14 @@ jobs:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENAI_API_BASE: ${{ secrets.OPENAI_API_BASE }}
           CUSTOM_CONFIG: ${{ vars.CUSTOM_CONFIG }}
+          SEND_EMPTY: ${{ inputs.send_empty && 'true' || 'false' }}
         run: |
           printf "%b\n" "$CUSTOM_CONFIG" > config/custom.yaml
-          uv run src/zotero_arxiv_daily/main.py 2>&1 | tee "$RUNNER_TEMP/arxiv-daily.log"
+          args=()
+          if [[ "$SEND_EMPTY" == "true" ]]; then
+            args+=(executor.send_empty=true)
+          fi
+          uv run src/zotero_arxiv_daily/main.py "${args[@]}" 2>&1 | tee "$RUNNER_TEMP/arxiv-daily.log"
 
       - name: Summarize email delivery
         if: always()
