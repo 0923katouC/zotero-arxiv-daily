@@ -37,13 +37,69 @@ ARXIV_HEADER_PATTERN = re.compile(
 )
 
 
+FEED_MAX_AGE = timedelta(hours=6)
+
+
 def fetch_arxiv_feed(url: str):
-    request = Request(url, headers={"User-Agent": "zotero-arxiv-daily/1.0"})
+    request = Request(
+        url,
+        headers={"User-Agent": "zotero-arxiv-daily/1.0", "Cache-Control": "no-cache"},
+    )
     with urlopen(request, timeout=30) as response:
         feed = feedparser.parse(response.read())
         feed.status = response.status
         logger.info(f"arXiv RSS: HTTP {response.status}, {len(feed.entries)} entries")
         return feed
+
+
+def _feed_generated_at(feed) -> datetime | None:
+    """When arXiv generated the feed, or None when the feed does not say."""
+    meta = getattr(feed, "feed", None)
+    if meta is None:
+        return None
+    parsed = getattr(meta, "updated_parsed", None)
+    if parsed is None and hasattr(meta, "get"):
+        parsed = meta.get("updated_parsed")
+    if parsed is None:
+        return None
+    try:
+        return datetime.fromtimestamp(calendar.timegm(parsed), tz=timezone.utc)
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+def _cache_busted(url: str) -> str:
+    separator = "&" if "?" in url else "?"
+    return f"{url}{separator}cb={int(time.time())}"
+
+
+def refresh_feed_if_unusable(feed, url: str):
+    """Bypass arXiv's CDN cache when it hands back an empty or hours-old feed.
+
+    rss.arxiv.org is served through a CDN whose objects live for ~19 hours.
+    When arXiv regenerates the announcement feed it occasionally publishes a
+    valid but empty document; that empty copy is then cached and every later
+    request sees "no new papers", silently skipping the daily email.  An
+    unused query parameter misses the cache and forces a fresh copy.
+    """
+    generated_at = _feed_generated_at(feed)
+    stale = generated_at is not None and datetime.now(timezone.utc) - generated_at > FEED_MAX_AGE
+    if feed.entries and not stale:
+        return feed
+
+    reason = "empty feed" if not feed.entries else f"feed generated {generated_at:%Y-%m-%d %H:%M} UTC"
+    logger.warning(f"arXiv RSS looks like a cached copy ({reason}); requesting a fresh one")
+    try:
+        fresh = fetch_arxiv_feed(_cache_busted(url))
+    except (URLError, TimeoutError, OSError) as exc:
+        logger.warning(f"Fresh arXiv RSS fetch failed ({type(exc).__name__}); keeping the cached copy")
+        return feed
+
+    if not fresh.entries:
+        logger.warning("Fresh arXiv RSS copy is empty too")
+        return fresh if not feed.entries else feed
+    logger.info(f"arXiv RSS fresh copy: {len(fresh.entries)} entries")
+    return fresh
 
 
 def _download_file(url: str, path: str) -> None:
@@ -274,8 +330,10 @@ class ArxivRetriever(BaseRetriever):
         else:
             raise RuntimeError("arXiv RSS remained invalid after retries")
 
+        feed = refresh_feed_if_unusable(feed, rss_url)
+
         if not feed.entries:
-            logger.info("No arXiv announcement in the current feed. Holidays and deferred maintenance batches can legitimately be empty; recent API papers are not a new announcement.")
+            logger.info("No arXiv announcement in the current feed (verified against a fresh, uncached copy). Holidays and deferred maintenance batches can legitimately be empty; recent API papers are not a new announcement.")
             return []
 
         allowed_announce_types = {"new", "cross"} if include_cross_list else {"new"}

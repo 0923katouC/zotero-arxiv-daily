@@ -1,4 +1,5 @@
 """Announcement semantics, failure reporting and delivery deduplication."""
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from urllib.error import URLError
 
@@ -61,3 +62,84 @@ def test_invalid_http_feed_retries_and_fails(monkeypatch, tmp_path):
     monkeypatch.setattr(module, "fetch_arxiv_feed", lambda url: feed)
     with pytest.raises(RuntimeError, match="remained invalid"):
         retriever._retrieve_raw_papers()
+
+
+NEW_ENTRY = feedparser.FeedParserDict(
+    id="oai:arXiv.org:2610.12345v1",
+    title="New paper",
+    summary="Abstract: Original result",
+    author="Test Author",
+    arxiv_announce_type="new",
+)
+
+
+def atom_feed(entries=(), generated_at=None):
+    """FeedParserDict shaped like a real rss.arxiv.org/atom response."""
+    meta = feedparser.FeedParserDict(title="gr-qc updates")
+    if generated_at is not None:
+        meta["updated"] = generated_at.strftime("%Y-%m-%dT%H:%M:%SZ")
+        meta["updated_parsed"] = generated_at.utctimetuple()
+    return feedparser.FeedParserDict(feed=meta, entries=list(entries), status=200)
+
+
+def test_cached_empty_feed_is_refetched_without_the_cdn(monkeypatch, tmp_path):
+    """A cached empty feed must not be reported as "no announcement"."""
+    retriever = make_retriever(monkeypatch, tmp_path)
+    calls = []
+
+    def fetch(url):
+        calls.append(url)
+        return atom_feed([NEW_ENTRY]) if "cb=" in url else atom_feed()
+
+    monkeypatch.setattr(module, "fetch_arxiv_feed", fetch)
+    papers = retriever._retrieve_raw_papers()
+
+    assert len(papers) == 1
+    assert len(calls) == 2
+    assert "rss.arxiv.org/atom/gr-qc" in calls[0]
+    assert "cb=" in calls[1]
+
+
+def test_hours_old_cached_feed_is_refetched(monkeypatch, tmp_path):
+    retriever = make_retriever(monkeypatch, tmp_path)
+    generated_at = datetime.now(timezone.utc) - timedelta(hours=10)
+    calls = []
+
+    def fetch(url):
+        calls.append(url)
+        if "cb=" in url:
+            return atom_feed([NEW_ENTRY], generated_at=datetime.now(timezone.utc))
+        return atom_feed([], generated_at=generated_at)
+
+    monkeypatch.setattr(module, "fetch_arxiv_feed", fetch)
+    papers = retriever._retrieve_raw_papers()
+
+    assert len(papers) == 1
+    assert "cb=" in calls[1]
+
+
+def test_fresh_populated_feed_is_used_as_is(monkeypatch, tmp_path):
+    retriever = make_retriever(monkeypatch, tmp_path)
+    calls = []
+    fresh = atom_feed([NEW_ENTRY], generated_at=datetime.now(timezone.utc))
+
+    def fetch(url):
+        calls.append(url)
+        return fresh
+
+    monkeypatch.setattr(module, "fetch_arxiv_feed", fetch)
+    assert len(retriever._retrieve_raw_papers()) == 1
+    assert len(calls) == 1
+
+
+def test_genuinely_empty_feed_returns_no_papers(monkeypatch, tmp_path):
+    retriever = make_retriever(monkeypatch, tmp_path)
+    calls = []
+
+    def fetch(url):
+        calls.append(url)
+        return atom_feed()
+
+    monkeypatch.setattr(module, "fetch_arxiv_feed", fetch)
+    assert retriever._retrieve_raw_papers() == []
+    assert len(calls) == 2
