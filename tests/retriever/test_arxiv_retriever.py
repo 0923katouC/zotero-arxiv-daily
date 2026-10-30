@@ -1,6 +1,7 @@
 """Tests for ArxivRetriever."""
 
 import time
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import feedparser
@@ -233,6 +234,9 @@ def test_retrieve_raw_papers_debug_mode(config, mock_feedparser, monkeypatch):
 
 def test_retrieve_raw_papers_retries_on_http_failure(config, mock_feedparser, monkeypatch):
     monkeypatch.setattr(arxiv_retriever, "sleep", lambda _: None)
+    # Keep the fixture feed young so this test only exercises the HTTP retry
+    # path; the CDN-cache fallback has its own tests in test_arxiv_reliability.
+    mock_feedparser.feed["updated_parsed"] = datetime.now(timezone.utc).utctimetuple()
     calls = []
 
     def mock_parse_flaky(url):
