@@ -1,4 +1,4 @@
-"""Remember successfully emailed papers; never store credentials or paper text."""
+"""Remember papers already covered by an emailed digest; never store credentials or paper text."""
 import json
 import os
 import re

@@ -281,3 +281,53 @@ def test_run_no_papers_send_empty_true(config, monkeypatch):
     assert len(sent) == 1, "Email should be sent even with no papers when send_empty=true"
     _, _, body = sent[0]
     assert "text/html" in body
+
+
+def test_second_run_on_same_batch_sends_nothing(config, monkeypatch, tmp_path):
+    """arXiv serves the same feed all day, so a rerun must not email leftovers.
+
+    The email only carries ``max_paper_num`` papers but the delivery state has
+    to consume the whole batch; otherwise the backup schedule would send a
+    second digest containing the papers that did not make the first cut.
+    """
+    import smtplib
+
+    from omegaconf import open_dict
+
+    from tests.canned_responses import make_sample_paper, make_stub_openai_client, make_stub_smtp, make_stub_zotero_client
+
+    monkeypatch.setenv("DELIVERY_STATE_FILE", str(tmp_path / "delivered.json"))
+
+    with open_dict(config):
+        config.executor.source = ["arxiv"]
+        config.executor.reranker = "api"
+        config.executor.send_empty = False
+        config.executor.max_paper_num = 1
+
+    stub_zot = make_stub_zotero_client()
+    monkeypatch.setattr("zotero_arxiv_daily.executor.zotero.Zotero", lambda *a, **kw: stub_zot)
+
+    stub_client = make_stub_openai_client()
+    monkeypatch.setattr("zotero_arxiv_daily.executor.OpenAI", lambda **kw: stub_client)
+    monkeypatch.setattr("zotero_arxiv_daily.reranker.api.OpenAI", lambda **kw: stub_client)
+
+    import zotero_arxiv_daily.retriever.arxiv_retriever  # noqa: F401
+
+    from zotero_arxiv_daily.retriever.base import registered_retrievers
+
+    batch = [
+        make_sample_paper(title="Batch Paper 1", url="https://arxiv.org/abs/2610.00001"),
+        make_sample_paper(title="Batch Paper 2", url="https://arxiv.org/abs/2610.00002"),
+        make_sample_paper(title="Batch Paper 3", url="https://arxiv.org/abs/2610.00003"),
+    ]
+    monkeypatch.setattr(registered_retrievers["arxiv"], "retrieve_papers", lambda self: batch)
+
+    sent = []
+    monkeypatch.setattr(smtplib, "SMTP", make_stub_smtp(sent))
+    monkeypatch.setattr("zotero_arxiv_daily.retriever.base.sleep", lambda _: None)
+
+    Executor(config).run()
+    assert len(sent) == 1, "first run emails the top paper of the batch"
+
+    Executor(config).run()
+    assert len(sent) == 1, "a rerun of the same batch must not email the leftovers"

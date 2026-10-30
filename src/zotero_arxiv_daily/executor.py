@@ -125,4 +125,8 @@ class Executor:
         email_content = render_email(reranked_papers)
         send_email(self.config, email_content)
         logger.info("Email sent successfully")
-        delivery_state.mark_sent(p.url for p in reranked_papers)
+        # Consume the whole announcement batch, not only the papers that fit in
+        # the email. arXiv serves the same feed for the rest of the day, so a
+        # later run (backup schedule, retry after a delayed first run) would
+        # otherwise email the remaining papers as a second "today's batch".
+        delivery_state.mark_sent(p.url for p in all_papers)
