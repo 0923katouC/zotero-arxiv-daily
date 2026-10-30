@@ -3,8 +3,10 @@ name: Keep Alive
 on:
   workflow_dispatch:
   schedule:
-    # Run every 30 days at 00:00 UTC to keep the repository active
-    - cron: '0 0 */30 * *'
+    # Weekly commit so the repository never looks inactive long enough for
+    # GitHub to stop scheduling its workflows. The monthly interval used to
+    # leave a 28-day gap with no commits right before the schedule went silent.
+    - cron: '0 0 * * 1'
 
 jobs:
   keep-alive:

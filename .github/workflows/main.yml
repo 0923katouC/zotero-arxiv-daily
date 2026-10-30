@@ -14,6 +14,10 @@ on:
     # 14:17 Asia/Shanghai, after the arXiv RSS midnight-EST refresh.
     # Avoid the start of the hour, when scheduled Actions are more likely to queue.
     - cron: '17 6 * * *'
+    # Backstop at 20:17 Asia/Shanghai. GitHub can delay or silently skip a
+    # scheduled event; the second attempt still only emails papers that were
+    # not delivered yet, so a normal day produces no duplicate email.
+    - cron: '17 12 * * *'
 
 permissions:
   contents: read
@@ -99,5 +103,5 @@ jobs:
               echo "**Email delivery not confirmed.** Check the Run script logs."
             fi
             echo
-            echo "Scheduled check: daily at 14:17 Asia/Shanghai (06:17 UTC). GitHub may delay the start."
+            echo "Scheduled check: daily at 14:17 Asia/Shanghai (06:17 UTC), retried at 20:17 Asia/Shanghai (12:17 UTC). GitHub may delay the start."
           } >> "$GITHUB_STEP_SUMMARY"
